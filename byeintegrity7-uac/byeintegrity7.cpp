@@ -3,11 +3,17 @@
 #include <iostream>
 #include <string>
 
+using UserAssocSetPtr = void(WINAPI*)(int unknown0, PCWCHAR fileType, PCWCHAR progId);
 using UserAssocSetInternalPtr = HRESULT(WINAPI*)(void* unused0, PCWCHAR fileType, PCWCHAR progId, int unknown0);
 
 const BYTE SIGNATURE_NT10[] = {
 	0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x68, 0xA1, 0x48, 0x81, 0xEC, 0xA0,
 	0x00, 0x00, 0x00, 0x48, 0xC7, 0x45, 0xEF, 0xFE, 0xFF, 0xFF, 0xFF, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x70, 0x20
+};
+
+const BYTE SIGNATURE_NT6X[] = {
+	0x48, 0x89, 0x5C, 0x24, 0x08, 0x55, 0x56, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24, 0x80, 0xFE, 0xFF,
+	0xFF, 0x48, 0x81, 0xEC, 0x80, 0x02, 0x00, 0x00
 };
 
 template <typename T>
@@ -20,8 +26,8 @@ T LocateSignature(const BYTE signature[], const int signatureSize, const char* s
 	while (std::strcmp(sectionName, reinterpret_cast<char*>(sectionHeader->Name)) != 0)
 		sectionHeader++;
 
-	for (auto* i = reinterpret_cast<PUCHAR>(moduleHandle) + sectionHeader->PointerToRawData; i != reinterpret_cast<
-		PUCHAR>(moduleHandle) + sectionHeader->PointerToRawData + sectionHeader->SizeOfRawData - signatureSize; i++
+	for (auto* i = reinterpret_cast<PUCHAR>(moduleHandle) + sectionHeader->VirtualAddress; i != reinterpret_cast<
+		PUCHAR>(moduleHandle) + sectionHeader->VirtualAddress + sectionHeader->SizeOfRawData - signatureSize; i++
 		)
 	{
 		if (std::memcmp(signature, i, signatureSize) == 0)
@@ -68,7 +74,7 @@ int main()
 	
 	if (*reinterpret_cast<PULONG>(0x7FFE026C) == 10)
 		nt10 = true;
-	else if (*reinterpret_cast<PULONG>(0x7FFE026C) == 6 && *reinterpret_cast<PULONG>(0x7FFE0270) != 3)
+	else if (*reinterpret_cast<PULONG>(0x7FFE026C) == 6 && *reinterpret_cast<PULONG>(0x7FFE0270) < 2)
 	{
 		std::wcout << L"OS not supported.\n";
 		return EXIT_FAILURE;
@@ -83,17 +89,9 @@ int main()
 	}
 
 	std::wstring cmdLoc{ systemPath };
+	CoTaskMemFree(systemPath);
 	cmdLoc += L"\\cmd.exe /C \"start cmd.exe\"";
 	
-	const auto UserAssocSetInternal = LocateSignature<UserAssocSetInternalPtr>(
-		SIGNATURE_NT10, sizeof SIGNATURE_NT10, ".text",
-		LoadLibraryExW(L"SystemSettings.Handlers.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32));
-	if (!UserAssocSetInternal)
-	{
-		std::wcout << L"SystemSettings.Handlers.dll!UserAssocSet->\"Internal\" not found.\n";
-		return EXIT_FAILURE;
-	}
-
 	const RegistryEntry progId{
 		L"SOFTWARE\\Classes\\byeintegrity7\\shell\\open\\command", L"SOFTWARE\\Classes\\byeintegrity7"
 	};
@@ -118,7 +116,32 @@ int main()
 		return EXIT_FAILURE;
 	}
 
-	UserAssocSetInternal(nullptr, L"ms-windows-store", L"byeintegrity7", 1);
+	if (nt10)
+	{
+		const auto UserAssocSetInternal = LocateSignature<UserAssocSetInternalPtr>(
+			SIGNATURE_NT10, sizeof SIGNATURE_NT10, ".text",
+			LoadLibraryExW(L"SystemSettings.Handlers.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32));
+		if (!UserAssocSetInternal)
+		{
+			CoUninitialize();
+			std::wcout << L"SystemSettings.Handlers.dll!UserAssocSet->\"Internal\" not found.\n";
+			return EXIT_FAILURE;
+		}
+		UserAssocSetInternal(nullptr, L"ms-windows-store", L"byeintegrity7", 1);
+	}
+	else
+	{
+		const auto UserAssocSet = LocateSignature<UserAssocSetPtr>(SIGNATURE_NT6X, sizeof SIGNATURE_NT6X, ".text",
+			LoadLibraryExW(L"shell32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32));
+		if (!UserAssocSet)
+		{
+			CoUninitialize();
+			std::wcout << L"shell32.dll!UserAssocSet not found.\n";
+			return EXIT_FAILURE;
+		}
+		UserAssocSet(2, L"ms-windows-store", L"byeintegrity7");
+	}
+	
 	CoUninitialize();
 
 	SHELLEXECUTEINFOW info{
