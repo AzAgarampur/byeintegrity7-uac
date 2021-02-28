@@ -155,6 +155,7 @@ int main()
 		return EXIT_FAILURE;
 	}
 
+	std::wcout << L"Waiting for WSReset.exe to exit . . .\n";
 	WaitForSingleObject(info.hProcess, INFINITE);
 	CloseHandle(info.hProcess);
 	RegDeleteTreeW(
